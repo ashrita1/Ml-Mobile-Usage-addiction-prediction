@@ -30,13 +30,8 @@ warnings.filterwarnings("ignore")
 # ─────────────────────────────────────────────
 df = pd.read_csv("phone_addiction_dataset.csv")
 
-# Standardize column names
 df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-
-# Drop duplicates
 df.drop_duplicates(inplace=True)
-
-# Drop high-cardinality / non-predictive columns
 df.drop(columns=["name", "location"], inplace=True, errors="ignore")
 
 # ─────────────────────────────────────────────
@@ -66,33 +61,19 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # ─────────────────────────────────────────────
-# 4.  PREPROCESSOR  (fit on train, transform both)
+# 4.  PREPROCESSOR
 # ─────────────────────────────────────────────
 categorical_cols = ["gender", "phone_usage_purpose"]
 numerical_cols   = X_train.select_dtypes(include=["int64", "float64"]).columns.tolist()
 
-# We embed the scaler inside each Optuna objective so we can tune it.
-# The OneHotEncoder is always applied to categorical columns.
-# Build a base preprocessor (categorical only) — numerical scaling is handled per trial.
 cat_preprocessor = ColumnTransformer(
     transformers=[
         ("cat", OneHotEncoder(drop=None, handle_unknown="ignore"), categorical_cols),
     ],
-    remainder="passthrough"          # numerical cols pass through; scaled inside pipeline
+    remainder="passthrough"
 )
 
-# ─────────────────────────────────────────────
-# 5.  PIPELINE  (rebuilt each trial via set_params)
-# ─────────────────────────────────────────────
-# We use a two-step pipeline:
-#   Step 1 – ColumnTransformer  (OHE for categoricals + chosen scaler for numericals)
-#   Step 2 – Regressor model
-#
-# Because we want to tune the scaler per trial, we build a fresh
-# ColumnTransformer inside each objective.
-
 def make_preprocessor(scaler):
-    """Return a ColumnTransformer with the given scaler for numericals."""
     return ColumnTransformer(
         transformers=[
             ("cat", OneHotEncoder(drop=None, handle_unknown="ignore"), categorical_cols),
@@ -115,15 +96,13 @@ def cv_r2(pipeline, X, y, n_splits=5):
     return cross_val_score(pipeline, X, y, scoring="r2", cv=kf).mean()
 
 # ─────────────────────────────────────────────
-# 6.  OPTUNA OBJECTIVES
+# 5.  OPTUNA OBJECTIVES
 # ─────────────────────────────────────────────
 
 def objective_lr(trial):
     scaler = get_scaler(trial)
-    alpha = trial.suggest_float("alpha", 1e-4, 10.0, log=True)
-    model = Ridge(alpha=alpha)
+    model = Ridge(alpha=trial.suggest_float("alpha", 1e-4, 10.0, log=True))
     return cv_r2(make_pipeline(scaler, model), X_train, y_train)
-
 
 def objective_dt(trial):
     scaler = get_scaler(trial)
@@ -135,7 +114,6 @@ def objective_dt(trial):
         random_state      = 42,
     )
     return cv_r2(make_pipeline(scaler, model), X_train, y_train)
-
 
 def objective_rf(trial):
     scaler = get_scaler(trial)
@@ -151,7 +129,6 @@ def objective_rf(trial):
     )
     return cv_r2(make_pipeline(scaler, model), X_train, y_train)
 
-
 def objective_gb(trial):
     scaler = get_scaler(trial)
     model = GradientBoostingRegressor(
@@ -166,7 +143,6 @@ def objective_gb(trial):
     )
     return cv_r2(make_pipeline(scaler, model), X_train, y_train)
 
-
 def objective_knn(trial):
     scaler = get_scaler(trial)
     model = KNeighborsRegressor(
@@ -175,7 +151,6 @@ def objective_knn(trial):
         metric      = trial.suggest_categorical("metric", ["euclidean", "manhattan", "minkowski"]),
     )
     return cv_r2(make_pipeline(scaler, model), X_train, y_train)
-
 
 def objective_svr(trial):
     scaler = get_scaler(trial)
@@ -190,23 +165,19 @@ def objective_svr(trial):
     if kernel == "poly":
         params["degree"] = trial.suggest_int("degree", 2, 5)
     model = SVR(**params)
-    # SVR is slow — use 3-fold to keep run time reasonable
     kf = KFold(n_splits=3, shuffle=True, random_state=42)
     return cross_val_score(make_pipeline(scaler, model), X_train, y_train,
                            scoring="r2", cv=kf).mean()
 
-
 # ─────────────────────────────────────────────
-# 7.  REBUILD BEST PIPELINE HELPERS
+# 6.  REBUILD BEST PIPELINE
 # ─────────────────────────────────────────────
 
 def rebuild_best_pipeline(model_name, best_params):
-    """Re-instantiate the best pipeline from Optuna's best_params."""
     scaler = StandardScaler() if best_params["scaler_type"] == "standard" else MinMaxScaler()
 
     if model_name == "LinearRegression":
         model = Ridge(alpha=best_params["alpha"])
-
     elif model_name == "DecisionTree":
         model = DecisionTreeRegressor(
             max_depth         = best_params["max_depth"],
@@ -215,7 +186,6 @@ def rebuild_best_pipeline(model_name, best_params):
             max_features      = best_params["max_features"],
             random_state      = 42,
         )
-
     elif model_name == "RandomForest":
         model = RandomForestRegressor(
             n_estimators      = best_params["n_estimators"],
@@ -227,7 +197,6 @@ def rebuild_best_pipeline(model_name, best_params):
             random_state      = 42,
             n_jobs            = -1,
         )
-
     elif model_name == "GradientBoosting":
         model = GradientBoostingRegressor(
             n_estimators      = best_params["n_estimators"],
@@ -239,14 +208,12 @@ def rebuild_best_pipeline(model_name, best_params):
             subsample         = best_params["subsample"],
             random_state      = 42,
         )
-
     elif model_name == "KNN":
         model = KNeighborsRegressor(
             n_neighbors = best_params["n_neighbors"],
             weights     = best_params["weights"],
             metric      = best_params["metric"],
         )
-
     elif model_name == "SVR":
         params = {
             "kernel":  best_params["kernel"],
@@ -261,9 +228,8 @@ def rebuild_best_pipeline(model_name, best_params):
 
     return make_pipeline(scaler, model)
 
-
 # ─────────────────────────────────────────────
-# 8.  MAIN LOOP
+# 7.  MODEL ID & SCALER ID MAPPINGS  ← ADDED
 # ─────────────────────────────────────────────
 objectives = {
     "LinearRegression": objective_lr,
@@ -274,12 +240,24 @@ objectives = {
     "SVR":              objective_svr,
 }
 
-N_TRIALS = 20       # ← increase for better search (e.g. 50)
+# Map model names and scaler types to integer IDs for MLflow logging
+model_dict  = {name: idx for idx, name in enumerate(objectives.keys())}
+scaler_dict = {"standard": 0, "minmax": 1}
+
+# model_dict  = { "LinearRegression": 0, "DecisionTree": 1,
+#                 "RandomForest": 2,     "GradientBoosting": 3,
+#                 "KNN": 4,              "SVR": 5 }
+# scaler_dict = { "standard": 0, "minmax": 1 }
+
+N_TRIALS = 20
 
 mlflow.set_experiment("MobileAddiction_HPT_Runs")
 
 results = {}
 
+# ─────────────────────────────────────────────
+# 8.  MAIN LOOP
+# ─────────────────────────────────────────────
 for model_name, obj_fn in objectives.items():
     print(f"\n{'='*55}")
     print(f"  Optimizing: {model_name}")
@@ -302,25 +280,25 @@ for model_name, obj_fn in objectives.items():
     print(f"  Best CV R²  : {best_cv_r2:.4f}")
     print(f"  Best Params : {best_params}")
 
-    # ── Rebuild & fit on full training set ──────────────────────
+    # Rebuild & fit on full training set
     best_pipeline = rebuild_best_pipeline(model_name, best_params)
     best_pipeline.fit(X_train, y_train)
 
-    # ── Evaluate ─────────────────────────────────────────────────
+    # Evaluate
     start_test   = time.time()
     y_test_pred  = best_pipeline.predict(X_test)
     test_time    = time.time() - start_test
     y_train_pred = best_pipeline.predict(X_train)
 
-    train_r2   = round(r2_score(y_train, y_train_pred),     4)
-    test_r2    = round(r2_score(y_test,  y_test_pred),      4)
+    train_r2   = round(r2_score(y_train, y_train_pred),          4)
+    test_r2    = round(r2_score(y_test,  y_test_pred),           4)
     train_mae  = round(mean_absolute_error(y_train, y_train_pred), 4)
     test_mae   = round(mean_absolute_error(y_test,  y_test_pred),  4)
     train_rmse = round(np.sqrt(mean_squared_error(y_train, y_train_pred)), 4)
     test_rmse  = round(np.sqrt(mean_squared_error(y_test,  y_test_pred)),  4)
 
     diff   = round(train_r2 - test_r2, 4)
-    status = ("Good Fit" if diff < 0.05
+    status = ("Good Fit"         if diff < 0.05
               else "Mild Overfitting" if diff < 0.15
               else "Overfitting")
 
@@ -328,25 +306,28 @@ for model_name, obj_fn in objectives.items():
     print(f"  Test MAE={test_mae}  Test RMSE={test_rmse}")
     print(f"  Fit Time: {fit_time:.1f}s  |  Test Time: {test_time:.4f}s")
 
-    # ── Save model & log to MLflow ────────────────────────────────
+    # Save model & log to MLflow
     model_path = f"{model_name}_addiction_model.pkl"
     joblib.dump(best_pipeline, model_path)
     model_size = os.path.getsize(model_path)
 
-    mlflow.log_metric("cv_r2",       best_cv_r2)
-    mlflow.log_metric("train_r2",    train_r2)
-    mlflow.log_metric("test_r2",     test_r2)
-    mlflow.log_metric("train_mae",   train_mae)
-    mlflow.log_metric("test_mae",    test_mae)
-    mlflow.log_metric("train_rmse",  train_rmse)
-    mlflow.log_metric("test_rmse",   test_rmse)
-    mlflow.log_metric("r2_diff",     diff)
-    mlflow.log_metric("train_time",  fit_time)
-    mlflow.log_metric("test_time",   test_time)
-    mlflow.log_metric("model_size",  model_size)
-    mlflow.log_param("fit_status",   status)
+    # ── MLflow logging ────────────────────────────────────────
+    mlflow.log_metric("model_id",   model_dict[model_name])               # ← integer ID
+    mlflow.log_metric("scaler_id",  scaler_dict[best_params["scaler_type"]])  # ← integer ID
+    mlflow.log_metric("cv_r2",      best_cv_r2)
+    mlflow.log_metric("train_r2",   train_r2)
+    mlflow.log_metric("test_r2",    test_r2)
+    mlflow.log_metric("train_mae",  train_mae)
+    mlflow.log_metric("test_mae",   test_mae)
+    mlflow.log_metric("train_rmse", train_rmse)
+    mlflow.log_metric("test_rmse",  test_rmse)
+    mlflow.log_metric("r2_diff",    diff)
+    mlflow.log_metric("train_time", fit_time)
+    mlflow.log_metric("test_time",  test_time)
+    mlflow.log_metric("model_size", model_size)
+    mlflow.log_param("fit_status",  status)
     mlflow.sklearn.log_model(best_pipeline, name=f"{model_name}_addiction_model")
-    #os.remove(model_path)
+    # os.remove(model_path)   ← commented out so .pkl files are kept
 
     results[model_name] = {
         "best_params":  best_params,
@@ -381,3 +362,11 @@ print(summary.to_string())
 best_model_name = summary["test_r2"].idxmax()
 print(f"\n  Best model by Test R²: {best_model_name}  "
       f"(Test R² = {summary.loc[best_model_name, 'test_r2']:.4f})")
+
+print("\n  Model ID Reference:")
+for name, idx in model_dict.items():
+    print(f"    {idx} = {name}")
+
+print("\n  Scaler ID Reference:")
+for name, idx in scaler_dict.items():
+    print(f"    {idx} = {name}")

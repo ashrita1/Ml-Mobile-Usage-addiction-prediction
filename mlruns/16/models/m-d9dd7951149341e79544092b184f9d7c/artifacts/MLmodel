@@ -1,0 +1,23 @@
+artifact_path: file:///C:/Users/chinn/OneDrive/Desktop/Mobile-addiction-prediction/mlruns/16/models/m-d9dd7951149341e79544092b184f9d7c/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.11.9
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.6.1
+    skops_trusted_types: null
+mlflow_version: 3.13.0
+model_id: m-d9dd7951149341e79544092b184f9d7c
+model_size_bytes: 70407533
+model_uuid: m-d9dd7951149341e79544092b184f9d7c
+prompts: null
+run_id: 342bd07dd7ba474e82a792c378c794f7
+utc_time_created: '2026-06-08 12:17:17.045463'
